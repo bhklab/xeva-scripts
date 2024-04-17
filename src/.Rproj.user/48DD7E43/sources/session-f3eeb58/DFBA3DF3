@@ -1,0 +1,24 @@
+{
+    "id": "DFBA3DF3",
+    "path": "~/CXP/xevaDB/src/uhn_lung_cancer.R",
+    "project_path": "uhn_lung_cancer.R",
+    "type": "r_source",
+    "hash": "839446621",
+    "contents": "",
+    "dirty": false,
+    "created": 1701046869127.0,
+    "source_on_save": false,
+    "relative_order": 2,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1574709916,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1701046877611,
+    "read_only": false,
+    "read_only_alternatives": []
+}
