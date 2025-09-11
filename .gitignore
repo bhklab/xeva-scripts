@@ -2,3 +2,7 @@
 results
 data
 xevasets-obj
+.Rproj.user
+.RData
+.Rhistory
+.DS_Store

@@ -2,7 +2,7 @@ options(stringsAsFactors = FALSE)
 library(Xeva)
 source("xevaDB_fun.R")
 #mpx = readRDS("~/CXP/XG/MP/Data/MP_XevaSet.rds")
-mpx = readRDS("../xevasets-obj/McGill_XevaSet_2024.rds")
+mpx = readRDS("/Users/mattbocc/uhn/xeva-scripts/xevasets-obj/McGill_XevaSet_2024.rds")
 
 max.time = 30
 
@@ -60,27 +60,27 @@ mpx  <- setResponse(mpx, res.measure = c("angle", "abc", "TGI"),
 m = get_model_info(mpx)
 m$dataset <- "McGill TNBC"; m$tissue <- "Breast Cancer"
 m <- m[,c("model.id","tissue","patient.id","drug","dataset")]
-write.csv(m, file = "results/McGill_TNBC/model_information.csv")
+write.csv(m, file = "../results/McGill_TNBC/model_information.csv")
 
 ##---------------batch_information----------------------------------
 b = get_batch_info(mpx)
-write.csv(b, file = "results/McGill_TNBC/batch_information.csv")
+write.csv(b, file = "../results/McGill_TNBC/batch_information.csv")
 
 ##-----drug_screening-----------------------------------
 mdf = drug_screening(mpx)
-write.csv(mdf, file = "results/McGill_TNBC/drug_screening.csv")
+write.csv(mdf, file = "../results/McGill_TNBC/drug_screening.csv")
 
 ##----------model_response---------------------------------
 mres <- model_response(mpx)
-write.csv(mres, file = "results/McGill_TNBC/model_response.csv")
+write.csv(mres, file = "../results/McGill_TNBC/model_response.csv")
 
 ##----------batch_response---------------------------------
 brf <- batch_response(mpx)
-write.csv(brf, file = "results/McGill_TNBC/batch_response.csv")
+write.csv(brf, file = "../results/McGill_TNBC/batch_response.csv")
 
 ###---------modelid_moleculardata_mapping ------------------
 mmap = modelid_moleculardata_mapping(mpx, dt = c("RNAseq","mutation","CNV"))
-write.csv(mmap, file = "results/McGill_TNBC/modelid_moleculardata_mapping.csv")
+write.csv(mmap, file = "../results/McGill_TNBC/modelid_moleculardata_mapping.csv")
 
 ##-----------expression ----------
 fd = fData(mpx@molecularProfiles$RNAseq)
@@ -89,7 +89,7 @@ mpx@molecularProfiles$RNAseq = mpx@molecularProfiles$RNAseq[rownames(pc),]
 featureNames(mpx@molecularProfiles$RNAseq) = 
   make.names(fData(mpx@molecularProfiles$RNAseq)$gene_name, unique = T)
 df=expression(mpx, dt = "RNAseq")
-write.csv(df, file = "results/McGill_TNBC/rna_sequencing.csv")
+write.csv(df, file = "../results/McGill_TNBC/rna_sequencing.csv")
 
 ##----------- mutation ----------
 ##mut=exprs(mpx@molecularProfiles$mutation)
@@ -99,7 +99,7 @@ df <- getFlatDF(exprs(mpx@molecularProfiles$mutation))
 #mutMap[c("0", "Silent")]="0"
 
 #df$value = mutMap[df$value]
-write.csv(df, file = "results/McGill_TNBC/mutation.csv")
+write.csv(df, file = "../results/McGill_TNBC/mutation.csv")
 
 ##----------- cnv ----------
 cnvCat <- c("-2"= "Deep Deletion", # indicates a deep loss, possibly a homozygous deletion
@@ -112,5 +112,5 @@ cnvCat <- c("-2"= "Deep Deletion", # indicates a deep loss, possibly a homozygou
 df <- getFlatDF(exprs(mpx@molecularProfiles$CNV))
 #df$value <- cnvCat[as.character(df$value)]
 df$value[df$value=="Diploid"] <- "0"
-write.csv(df, file = "results/McGill_TNBC/copy_number_variation.csv")
+write.csv(df, file = "../results/McGill_TNBC/copy_number_variation.csv")
 
