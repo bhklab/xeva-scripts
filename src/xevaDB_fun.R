@@ -3,11 +3,34 @@ suppressMessages(library(Biobase))
 library(reshape2)
 library(data.table)
 options(stringsAsFactors = FALSE) 
+
+# Safety patch for Xeva::TGI:
+# When control or treatment volume has < 1 timepoints (e.g. truncated by max.time,
+# or experiments with single observations), orig_TGI calculates numeric(0), which crashes
+# setResponse data.frame assignment with 'replacement has length zero'.
+# This patch ensures TGI returns NA_real_ instead of numeric(0).
+try({
+  ns <- asNamespace("Xeva")
+  if (bindingIsLocked("TGI", ns)) unlockBinding("TGI", ns)
+  orig_TGI <- get("TGI", ns)
+  assign("TGI", function(contr.volume, treat.volume) {
+    if (is.null(contr.volume) || is.null(treat.volume) || 
+        length(contr.volume) < 1 || length(treat.volume) < 1) {
+      return(ns$batch_response_class(name = "TGI", value = NA_real_))
+    }
+    res <- orig_TGI(contr.volume, treat.volume)
+    if (length(res$value) == 0) {
+      res$value <- NA_real_
+    }
+    return(res)
+  }, ns)
+  lockBinding("TGI", ns)
+}, silent = TRUE) 
 ##---------------model_info-----------------------------------------
 get_model_info <- function(pdxe)
 {
   m = modelInfo(pdxe)
-  m$dataset = paste0("PDXE (", m$tissue.name, ")")
+  m$dataset = paste0("PDXE_v2 (", m$tissue.name, ")")
   m$tissue = m$tissue.name
   m$tissue.name=NULL
   return(m)
@@ -84,14 +107,14 @@ model_response <- function(pdxe)
   mr$survival <- getNumToString(mr$survival)
   
   mid <- modelInfo(pdxe)
-  mrf <- data.frame()
-  for(m in rownames(mr))
-  {
-    r=data.frame(drug=mid$drug[mid$model.id==m], model.id=m, response_type=colnames(mr),
-                 stringsAsFactors = F)
-    r$value = sapply(r$response_type, function(i)mr[m,i])
-    mrf <- rbind(mrf, r)
-  }
+  drug_map <- setNames(mid$drug, mid$model.id)
+  mr$model.id <- rownames(mr)
+  mr$drug <- drug_map[mr$model.id]
+  
+  mrf <- reshape2::melt(mr, id.vars = c("drug", "model.id"),
+                        variable.name = "response_type", value.name = "value")
+  mrf$response_type <- as.character(mrf$response_type)
+  mrf <- mrf[, c("drug", "model.id", "response_type", "value")]
   return(mrf)
 }
 
@@ -103,13 +126,12 @@ batch_response <- function(pdxe)
   br$angle <- getNumToString(br$angle)
   br$abc <- getNumToString(br$abc)
   br$TGI <- getNumToString(br$TGI)
-  brf <- data.frame()
-  for(b in rownames(br))
-  {
-    r=data.frame(batch.id=b, response_type=colnames(br), stringsAsFactors = F)
-    r$value = sapply(r$response_type, function(i)br[b,i])
-    brf <- rbind(brf, r)
-  }
+  br$batch.id <- rownames(br)
+  
+  brf <- reshape2::melt(br, id.vars = "batch.id",
+                        variable.name = "response_type", value.name = "value")
+  brf$response_type <- as.character(brf$response_type)
+  brf <- brf[, c("batch.id", "response_type", "value")]
   return(brf)
 }
 
@@ -138,8 +160,10 @@ expression <- function(pdxe, dt="RNASeq")
   df = exprs(pdxe@molecularProfiles[[dt]])
   commanSample <- intersect(idmap$biobase.id, colnames(df))
   df = df[,commanSample]
-  df = t(scale(t(df))[,])
-  rtx = getFlatDF(df)
+  scaled <- t(scale(t(df))[,])
+  # Genes with zero variance across all samples produce NaN when dividing by sd=0; set to 0
+  scaled[is.nan(scaled)] <- 0
+  rtx = getFlatDF(scaled)
   return(rtx)
 }
 
@@ -151,45 +175,41 @@ mutation <- function(pdxe)
   
   df = exprs(pdxe@molecularProfiles$mutation)
   commanSample <- intersect(idmap$biobase.id, colnames(df))
-  df = df[,commanSample]
+  if (length(commanSample) > 0) {
+    df = df[, commanSample, drop = FALSE]
+  }
   df <- getFlatDF(df)
   
-  unqVal <- unique(df$value)
-  vl <- as.list(rep("0", length(unqVal))); names(vl)=unqVal
-  mutNames = names(vl)[grepl("MUT", toupper(names(vl)))]
-  vl[mutNames] = "mutation"
-  df$value <- unlist(vl[df$value])
+  df$value <- as.character(df$value)
+  df$value[is.na(df$value) | df$value == ""] <- "0"
+  df$value[df$value %in% c("1", 1) | grepl("MUT", toupper(df$value))] <- "mutation"
   return(df)
 }
 
-##----------- mutation data ----------
+##----------- cnv data ----------
 cnv <- function(pdxe)
 {
-  # idmap = pdxe@modToBiobaseMap
-  # idmap = idmap[idmap$mDataType=="cnv", ]
-  # 
-  # df = exprs(pdxe@molecularProfiles$cnv)
-  # commanSample <- intersect(idmap$biobase.id, colnames(df))
-  # df = df[,commanSample]
-  # df <- getFlatDF(df)
-  
   idmap = pdxe@modToBiobaseMap
-  idmap = idmap[idmap$mDataType=="mutation", ]
+  idmap = idmap[idmap$mDataType=="cnv", ]
   
-  df = exprs(pdxe@molecularProfiles$mutation)
+  df = exprs(pdxe@molecularProfiles$cnv)
+  df = df[!rownames(df) %in% c("ArmLevelCNScore", "FocalCNScore"), , drop = FALSE]
   commanSample <- intersect(idmap$biobase.id, colnames(df))
-  df = df[,commanSample]
-  df <- getFlatDF(df)
-  
-  unqVal <- unique(df$value)
-  vl <- as.list(rep("0", length(unqVal))); names(vl)=unqVal
-  #cnvTxt = c("Amp5", "Amp8", "Del0.8")
-  for(i in names(vl))
-  {
-    if(grepl("Amp5|Amp8", i)==TRUE){vl[[i]]="Amplification"}
-    if(grepl("Del0.8", i)==TRUE){vl[[i]]="Deletion"}
+  if (length(commanSample) > 0) {
+    df = df[, commanSample, drop = FALSE]
   }
-  df$value <- unlist(vl[df$value])
+  df <- getFlatDF(df)
+
+  # PDXE CNV Classification:
+  # Amp5 / Amp8 (copy number > 5)  -> "Amplification"
+  # Del0.8 (copy number <= 0.8)     -> "Deletion"
+  # Normal / diploid range          -> "0"
+  val <- as.numeric(df$value)
+  cat_val <- rep("0", length(val))
+  cat_val[!is.na(val) & val > 5] <- "Amplification"
+  cat_val[!is.na(val) & val <= 0.8] <- "Deletion"
+  df$value <- cat_val
+
   return(df)
 }
 

@@ -6,3 +6,6 @@ xevasets-obj
 .RData
 .Rhistory
 .DS_Store
+results*
+xevasets*
+Xeva/
