@@ -9,28 +9,29 @@ dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 # In-memory sanitization: make.names ensures model IDs (e.g. leading numbers or "-"/"+")
 # match the rownames that Xeva::modelInfo generates, preventing subsetXeva from failing.
+# Every slot keyed by model.id must be sanitized together. subsetXeva() indexes
+# @model BY ROWNAME, so if rownames(tnbc@model) keep the raw IDs, every model whose ID
+# changes under make.names (leading digit, "-", "+") becomes an NA row and is silently
+# dropped by the is.na(patient.id) filter below.
 tnbc@model$model.id <- make.names(tnbc@model$model.id)
+rownames(tnbc@model) <- tnbc@model$model.id
 names(tnbc@experiment) <- make.names(names(tnbc@experiment))
 for (i in seq_along(tnbc@expDesign)) {
   tnbc@expDesign[[i]]$treatment <- make.names(tnbc@expDesign[[i]]$treatment)
   tnbc@expDesign[[i]]$control <- make.names(tnbc@expDesign[[i]]$control)
 }
+tnbc@sensitivity$model$model.id <- make.names(tnbc@sensitivity$model$model.id)
+rownames(tnbc@sensitivity$model) <- tnbc@sensitivity$model$model.id
 tnbc@modToBiobaseMap$model.id <- make.names(tnbc@modToBiobaseMap$model.id)
+for (i in seq_along(tnbc@experiment)) {
+  tnbc@experiment[[i]]@model.id <- names(tnbc@experiment)[i]
+}
 
-##-----for non RES -------
+##-----for non RES and remove DMSO -------
 mi <- modelInfo(tnbc)
-tnbc.nor <- subsetXeva(tnbc, ids=mi$model.id[!grepl("_RES", mi$model.id, ignore.case=TRUE)], id.name="model.id")
+mid <- mi[!grepl("_RES", mi$model.id, ignore.case=TRUE) & mi$drug != "DMSO", ]
 
-##------subset by drug --------------------
-mi <- modelInfo(tnbc.nor)
-ndr <- sort(table(mi$drug))
-drug2take <- names(ndr)[ndr>3]
-mid <- mi[mi$drug%in%drug2take, ]
-
-print(colnames(tnbc.nor@sensitivity$model))
-
-tnbc.nor <- subsetXeva(tnbc.nor, ids=mid$model.id, id.name="model.id", 
-                       keep.batch = F)
+tnbc.nor <- subsetXeva(tnbc, ids=mid$model.id, id.name="model.id", keep.batch = FALSE)
 
 
 ##----------------------------------

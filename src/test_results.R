@@ -14,6 +14,7 @@
 
 suppressPackageStartupMessages({
   library(data.table)
+  library(Xeva)
 })
 
 # ---------------------------------------------------------------------------
@@ -467,6 +468,118 @@ run_tests_for_subfolder <- function(subfolder_path) {
 }
 
 # ---------------------------------------------------------------------------
+# RDS vs. Extracted Output Audit
+# ---------------------------------------------------------------------------
+
+test_rds_audit <- function(results_dir) {
+  rds_candidates <- c(
+    file.path(dirname(results_dir), "xevasets_obj_2026"),
+    file.path(dirname(results_dir), "xevasets-obj"),
+    file.path(getwd(), "..", "xevasets_obj_2026"),
+    file.path(getwd(), "xevasets_obj_2026")
+  )
+  rds_dir <- NULL
+  for (d in rds_candidates) {
+    if (dir.exists(d)) {
+      rds_dir <- normalizePath(d)
+      break
+    }
+  }
+
+  if (is.null(rds_dir)) {
+    cat("\n[WARN] xevasets_obj_2026 directory not found; skipping RDS audit table.\n")
+    return(NULL)
+  }
+
+  subfolders <- list.dirs(results_dir, full.names = TRUE, recursive = FALSE)
+  audit_rows <- list()
+
+  cat(sprintf("\n%s\n## RDS VS. EXTRACTED OUTPUT AUDIT\n%s\n", strrep("=", 60), strrep("=", 60)))
+
+  for (sf in subfolders) {
+    sub_name <- basename(sf)
+    s <- tolower(sub_name)
+
+    rds_file <- if (grepl("pdxe", s)) file.path(rds_dir, "Xeva_PDXE_v2.rds")
+                else if (grepl("mcgill", s)) file.path(rds_dir, "Xeva_McGill_v2.rds")
+                else if (grepl("lung|tsao|kras", s)) file.path(rds_dir, "UHN_Tsao_Lung_DrugResponse_2022_v1.rds")
+                else if (grepl("tnbc|cescon|breast", s)) file.path(rds_dir, "UHN_Cescon_Breast_DrugResponse_2025_v1.rds")
+                else NULL
+
+    if (is.null(rds_file) || !file.exists(rds_file)) next
+
+    x <- tryCatch(readRDS(rds_file), error = function(e) NULL)
+    if (is.null(x)) next
+
+    exp_drugs <- sapply(x@experiment, function(e) {
+      if (is.null(e)) return(NA_character_)
+      d <- e@drug
+      if (is.list(d)) {
+        if (!is.null(d[["join.name"]])) as.character(d[["join.name"]]) else paste(d, collapse = "|")
+      } else paste(d, collapse = "|")
+    })
+
+    if (grepl("tnbc|cescon|breast", s)) {
+      # TNBC dataset excludes resistant models (_RES) and DMSO control by design
+      mod_names <- names(x@experiment)
+      non_res_idx <- which(!grepl("_RES", mod_names, ignore.case = TRUE))
+      exp_drugs_non_res <- exp_drugs[non_res_idx]
+      valid_idx <- non_res_idx[exp_drugs_non_res != "DMSO" & !is.na(exp_drugs_non_res)]
+      valid_mods <- mod_names[valid_idx]
+      rds_m <- length(valid_idx)
+      rds_d <- length(unique(na.omit(exp_drugs_non_res[exp_drugs_non_res != "DMSO"])))
+      has_valid_trt <- sapply(x@expDesign, function(b) any(b$treatment %in% valid_mods))
+      has_valid_ctl <- sapply(x@expDesign, function(b) any(b$control %in% valid_mods))
+      rds_b <- sum(has_valid_trt & has_valid_ctl)
+    } else {
+      rds_m <- length(x@experiment)
+      rds_d <- length(unique(na.omit(exp_drugs)))
+      rds_b <- length(x@expDesign)
+    }
+    rm(x); gc(verbose = FALSE)
+
+    mi <- safe_read(file.path(sf, "model_information.csv"))
+    bi <- safe_read(file.path(sf, "batch_information.csv"))
+    out_m <- if (!is.null(mi)) nrow(mi) else 0
+    out_d <- if (!is.null(mi)) length(unique(mi$drug)) else 0
+    out_b <- if (!is.null(bi)) length(unique(bi$batch.id)) else 0
+
+    m_match <- (rds_m == out_m)
+    d_match <- (rds_d == out_d)
+    b_match <- (rds_b == out_b)
+    all_match <- m_match && d_match && b_match
+
+    log_test(sub_name, "model_information.csv", "RDS model count matches output",
+             m_match, sprintf("RDS=%d vs Output=%d (diff=%d)", rds_m, out_m, out_m - rds_m))
+    log_test(sub_name, "model_information.csv", "RDS drug count matches output",
+             d_match, sprintf("RDS=%d vs Output=%d (diff=%d)", rds_d, out_d, out_d - rds_d))
+    log_test(sub_name, "batch_information.csv", "RDS batch count matches output",
+             b_match, sprintf("RDS=%d vs Output=%d (diff=%d)", rds_b, out_b, out_b - rds_b))
+
+    audit_rows[[length(audit_rows) + 1]] <- data.frame(
+      Dataset     = sub_name,
+      RDS_Models  = rds_m,
+      Out_Models  = out_m,
+      RDS_Drugs   = rds_d,
+      Out_Drugs   = out_d,
+      RDS_Batches = rds_b,
+      Out_Batches = out_b,
+      Status      = if (all_match) "PASS (100% MATCH)" else "MISMATCH",
+      stringsAsFactors = FALSE
+    )
+  }
+
+  if (length(audit_rows) > 0) {
+    audit_df <- do.call(rbind, audit_rows)
+    cat(sprintf("\n%s\n", strrep("=", 92)))
+    cat("                     SUMMARY AUDIT: RDS OBJECT vs. EXTRACTED OUTPUTS\n")
+    cat(sprintf("%s\n", strrep("=", 92)))
+    print(audit_df, row.names = FALSE)
+    cat(sprintf("%s\n", strrep("=", 92)))
+  }
+}
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -494,6 +607,9 @@ if (length(subfolders) == 0) {
 for (sf in subfolders) {
   run_tests_for_subfolder(sf)
 }
+
+# Run RDS vs. Extracted Output Audit
+test_rds_audit(results_dir)
 
 # ---------------------------------------------------------------------------
 # Final summary
