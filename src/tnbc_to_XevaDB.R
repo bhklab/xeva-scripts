@@ -3,38 +3,49 @@ library(Xeva)
 library(readxl)
 source("xevaDB_fun.R")
 
-#tnbc <- readRDS("~/CXP/XG/TNBC_Xeva_obj/Data/XevaData/XEVA_OFFICIAL_SHARING/TNBC_Xeva_Obj.Rda")
-tnbc <- readRDS("/Users/mattbocc/uhn/xeva-scripts/xevasets-obj/Updated_Cescon_TNBC_Xeva_Obj_2.rds")
-# tnbcOld <- readRDS("/Users/mattbocc/uhn/xeva-scripts/xevasets-obj/Xeva_TNBC_Obj.rds")
+tnbc <- readRDS("/Users/mattbocc/uhn/xeva-scripts/xevasets_obj_2026/UHN_Cescon_Breast_DrugResponse_2025_v1.rds")
+out_dir <- "../results_2026_sep_23/TNBC_v2"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-##-----for non RES -------
+# In-memory sanitization: make.names ensures model IDs (e.g. leading numbers or "-"/"+")
+# match the rownames that Xeva::modelInfo generates, preventing subsetXeva from failing.
+# Every slot keyed by model.id must be sanitized together. subsetXeva() indexes
+# @model BY ROWNAME, so if rownames(tnbc@model) keep the raw IDs, every model whose ID
+# changes under make.names (leading digit, "-", "+") becomes an NA row and is silently
+# dropped by the is.na(patient.id) filter below.
+tnbc@model$model.id <- make.names(tnbc@model$model.id)
+rownames(tnbc@model) <- tnbc@model$model.id
+names(tnbc@experiment) <- make.names(names(tnbc@experiment))
+for (i in seq_along(tnbc@expDesign)) {
+  tnbc@expDesign[[i]]$treatment <- make.names(tnbc@expDesign[[i]]$treatment)
+  tnbc@expDesign[[i]]$control <- make.names(tnbc@expDesign[[i]]$control)
+}
+tnbc@sensitivity$model$model.id <- make.names(tnbc@sensitivity$model$model.id)
+rownames(tnbc@sensitivity$model) <- tnbc@sensitivity$model$model.id
+tnbc@modToBiobaseMap$model.id <- make.names(tnbc@modToBiobaseMap$model.id)
+for (i in seq_along(tnbc@experiment)) {
+  tnbc@experiment[[i]]@model.id <- names(tnbc@experiment)[i]
+}
+
+##-----for non RES and remove DMSO -------
 mi <- modelInfo(tnbc)
-tnbc.nor <- subsetXeva(tnbc, ids=mi$model.id[mi$resistant=="NO"], id.name="model.id")
+mid <- mi[!grepl("_RES", mi$model.id, ignore.case=TRUE) & mi$drug != "DMSO", ]
 
-##------subset by drug --------------------
-mi <- modelInfo(tnbc.nor)
-ndr <- sort(table(mi$drug))
-drug2take <- names(ndr)[ndr>3]
-mid <- mi[mi$drug%in%drug2take, ]
-
-print(colnames(tnbc.nor@sensitivity$model))
-
-tnbc.nor <- subsetXeva(tnbc.nor, ids=mid$model.id, id.name="model.id", 
-                       keep.batch = F)
+tnbc.nor <- subsetXeva(tnbc, ids=mid$model.id, id.name="model.id", keep.batch = FALSE)
 
 
 ##----------------------------------
 mi <- modelInfo(tnbc.nor)
 mi <- mi[!is.na(mi$patient.id),]
 
-mi$patient.id <- paste0("P.", mi$patient.id)
+# mi$patient.id <- paste0("P.", mi$patient.id)
 # pid2remove=c("P.1", "P.100534", "P.2018-12-28", "P.2019-01-16", "P.44721", 
 #              "P.5/18", "P.85227", "P.REF020", "P.2018-12-13", "P.5")
 # mi <- mi[! mi$patient.id %in% pid2remove,]
 tnbc.nor <- subsetXeva(tnbc.nor, ids=mi$model.id, id.name="model.id", 
                        keep.batch = F)
 ###-------------------------------
-max.time = 60; cutAtMaxTime = FALSE
+max.time = 30; cutAtMaxTime = FALSE
 ##----make sure curve start at 0 & cut everything at max.time ---
 for(i in names(tnbc.nor@experiment))
 {
@@ -62,10 +73,11 @@ mr3 <- mr2[names(nonNArow)[nonNArow>0], ]
 
 mi=modelInfo(tnbc.nor)
 mi=mi[mi$patient.id%in%colnames(mr3), ]
-mi=mi[mi$drug%in%rownames(mr3), ]
+mi=mi[mi$drug%in%c(rownames(mr3), "H2O"), ]
 
 tnbc.nor <- subsetXeva(tnbc.nor, ids=mi$model.id, id.name="model.id", 
                        keep.batch = F)
+
 ###-----------------------------------------------------------------
 max.time = 30
 tnbc.nor  <- setResponse(tnbc.nor, res.measure = c("mRECIST", "slope", "AUC"), 
@@ -75,18 +87,17 @@ tnbc.nor  <- setResponse(tnbc.nor, res.measure = c("angle", "abc", "TGI"),
 
 ##---------------model_info-----------------------------------------
 m = get_model_info(tnbc.nor)
-m$dataset <- "TNBC"; m$tissue <- "Breast Cancer"
+m$dataset <- "TNBC_v2"; m$tissue <- "Breast Cancer"
 mo <- m[,c("model.id","tissue","patient.id","drug","dataset")]
-write.csv(mo, file = "../results/TNBC/model_information.csv")
-
-fileLoc <- m[, c("model.id", "file.url")]
-fileLoc$row <- sapply(fileLoc$model.id, function(i)gsub("m", "", strsplit(i, "\\.")[[1]][2]))
-write.csv(fileLoc, file = "../results/TNBC/model_information_FileLink.csv")
+write.csv(mo, file = file.path(out_dir, "model_information.csv"))
 
 ##---------------batch_information----------------------------------
 b = get_batch_info(tnbc.nor)
-mi =modelInfo(tnbc.nor); b = b[b$model.id%in%mi$model.id,]
-write.csv(b, file = "../results/TNBC/batch_information.csv")
+mi = modelInfo(tnbc.nor); b = b[b$model.id%in%mi$model.id,]
+valid_batches <- names(which(tapply(b$type == "control", b$batch.id, any) & 
+                             tapply(b$type == "treatment", b$batch.id, any)))
+b <- b[b$batch.id %in% valid_batches, ]
+write.csv(b, file = file.path(out_dir, "batch_information.csv"))
 
 ##-----drug_screening-----------------------------------
 
@@ -101,75 +112,67 @@ print("Before drug screening")
 mdf = drug_screening(tnbc.nor)
 print("After drug screening")
 
+write.csv(mdf, file = file.path(out_dir, "drug_screening.csv"))
 
-write.csv(mdf, file = "../results/TNBC/drug_screening.csv")
+classes <- vapply(mdf, function(col) class(col)[1], "")
+utils::write.table(data.frame(name = names(mdf), class = classes),
+    file = file.path(out_dir, "drug_screening_column_classes.tsv"),
+    sep = "\t", row.names = FALSE, quote = FALSE
+)
 
 ##----------model_response---------------------------------
 mres <- model_response(tnbc.nor)
-write.csv(mres, file = "../results/TNBC/model_response.csv")
+write.csv(mres, file = file.path(out_dir, "model_response.csv"))
 
 ##----------batch_response---------------------------------
 brf <- batch_response(tnbc.nor)
-write.csv(brf, file = "../results/TNBC/batch_response.csv")
+brf <- brf[brf$batch.id %in% b$batch.id, ]
+write.csv(brf, file = file.path(out_dir, "batch_response.csv"))
 
 ###---------modelid_moleculardata_mapping ------------------
-mmap = modelid_moleculardata_mapping(tnbc.nor)
-write.csv(mmap, file = "../results/TNBC/modelid_moleculardata_mapping.csv")
+mmap = modelid_moleculardata_mapping(tnbc.nor, dt = c("RNASeq", "mutation", "CNV"))
+mmap = unique(mmap)
+write.csv(mmap, file = file.path(out_dir, "modelid_moleculardata_mapping.csv"))
 
 ##-----------expression ----------
 fd = fData(tnbc.nor@molecularProfiles$RNASeq)
-pc = fd[fd$gene_type == "protein_coding",]
+pc = fd[!is.na(fd$description) & fd$description == "protein_coding",]
 tnbc.nor@molecularProfiles$RNASeq = tnbc.nor@molecularProfiles$RNASeq[rownames(pc),]
 featureNames(tnbc.nor@molecularProfiles$RNASeq) = 
-  make.names(fData(tnbc.nor@molecularProfiles$RNASeq)$gene_name, unique = T)
+  make.names(fData(tnbc.nor@molecularProfiles$RNASeq)$hugo.id, unique = T)
 
 df=expression(tnbc.nor)
-write.csv(df, file = "../results/TNBC/rna_sequencing.csv")
+write.csv(df, file = file.path(out_dir, "rna_sequencing.csv"))
 
 ##-----------mutation ----------
-
-mutInfo <- read_excel("/Users/mattbocc/uhn/xeva-scripts/data/mutation.xlsx", 
-                           sheet = 1)
-mutCat <- mutInfo$IMPACT; names(mutCat) <- mutInfo$SO.term
-mutCat[mutCat %in% c("HIGH", "MODERATE")] <- "Mutation"
-mutCat[mutCat!="Mutation"] <- ""
-
 mut <- tnbc.nor@molecularProfiles$mutation
 df = getFlatDF(exprs(mut))
-df$value[is.na(df$value)] <- ""
+df$value <- as.character(df$value)
+df$value[is.na(df$value)] <- "0"
 df$value[df$value==""] <- "0"
-mutCat2 <- rep("", length(unique(df$value)))
-names(mutCat2)<- sort(unique(df$value))
-
-for(i in names(mutCat2))
-{
-  v <- strsplit(i, ",")[[1]]
-  if(length(v)>0)
-  {
-    if("Mutation" %in% mutCat[v]){mutCat2[i] <-"Mutation"} else
-    {mutCat2[i] <-"0"}
-  }
-}
-
-df$value <- mutCat2[df$value]
-df$value[df$value=="0"] <- ""
-###df=mutation(tnbc.nor)
-write.csv(df, file = "../results/TNBC/mutation.csv")
+write.csv(df, file = file.path(out_dir, "mutation.csv"))
 
 ##-----------copy_number_variation ----------
 
-cnvCat <- c("-2"= "Deep Deletion", # indicates a deep loss, possibly a homozygous deletion
-            "-1"= "Shallow Deletion",#indicates a shallow loss, possibley a heterozygous deletion
-            "0" = "Diploid",
-            "1" = "Gain", #indicates a low-level gain (a few additional copies, often broad)
-            "2" = "Amplification" # indicate a high-level amplification (more copies, often focal)
+# cnvCat <- c("-2"= "Deep Deletion", # indicates a deep loss, possibly a homozygous deletion
+#             "-1"= "Shallow Deletion",#indicates a shallow loss, possibley a heterozygous deletion
+#             "0" = "Diploid",
+#             "1" = "Gain", #indicates a low-level gain (a few additional copies, often broad)
+#             "2" = "Amplification" # indicate a high-level amplification (more copies, often focal)
+# )
+
+cnvCat <- c("-2" = "Deletion", # indicates a deep loss, possibly a homozygous deletion
+            "-1" = "Shallow Deletion",#indicates a shallow loss, possibley a heterozygous deletion
+            "0"  = "0",
+            "1"  = "Gain", #indicates a low-level gain (a few additional copies, often broad)
+            "2"  = "Amplification" # indicate a high-level amplification (more copies, often focal)
 )
 
 cnv <- tnbc.nor@molecularProfiles$CNV
 df = getFlatDF(exprs(cnv))
 df$value <- as.character(df$value)
 df$value <- cnvCat[df$value]
-df$value[df$value=="Diploid"] <- "0"
-write.csv(df, file = "../results/TNBC/copy_number_variation.csv")
+df$value[is.na(df$value) | df$value == "" | df$value == "Diploid"] <- "0"
+write.csv(df, file = file.path(out_dir, "copy_number_variation.csv"))
 
 ####-----------------------
